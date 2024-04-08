@@ -37,25 +37,49 @@ func main() {
 		}
 	}
 }
-
 func tryOCR(pdfPath, outputDir string) bool {
-	client := gosseract.NewClient()
-	defer client.Close()
-	err := client.SetImage(pdfPath)
+	// Must have Poppler installed for pdftoppm
+	tempDir, err := os.MkdirTemp("", "pdf_images")
 	if err != nil {
-		log.Printf("Error setting image for OCR: %s", err)
+		log.Printf("Failed to create temp directory: %s", err)
+		return false
+	}
+	defer os.RemoveAll(tempDir)
+
+	baseName := strings.TrimSuffix(filepath.Base(pdfPath), filepath.Ext(pdfPath))
+	imagePattern := filepath.Join(tempDir, baseName+"-%03d.png")
+	cmd := exec.Command("pdftoppm", "-png", pdfPath, imagePattern)
+	if err := cmd.Run(); err != nil {
+		log.Printf("Failed to convert PDF to images: %s", err)
 		return false
 	}
 
-	text, err := client.Text()
-	if err != nil || text == "" {
-		log.Printf("Error performing OCR or no text found: %s", err)
+	images, err := filepath.Glob(filepath.Join(tempDir, baseName+"-*.png"))
+	if err != nil {
+		log.Printf("Failed to find converted images: %s", err)
 		return false
 	}
 
-	outputFilePath := filepath.Join(outputDir, strings.TrimSuffix(filepath.Base(pdfPath), filepath.Ext(pdfPath))+".txt")
-	err = os.WriteFile(outputFilePath, []byte(text), 0644)
-	if err != nil {
+	var aggregatedText strings.Builder
+
+	for _, imagePath := range images {
+		client := gosseract.NewClient()
+		defer client.Close()
+		if err := client.SetImage(imagePath); err != nil {
+			log.Printf("Error setting image for OCR: %s", err)
+			continue
+		}
+
+		text, err := client.Text()
+		if err != nil || text == "" {
+			log.Printf("Error performing OCR or no text found: %s", err)
+			continue
+		}
+		aggregatedText.WriteString(text + "\n")
+	}
+
+	outputFilePath := filepath.Join(outputDir, baseName+".txt")
+	if err := os.WriteFile(outputFilePath, []byte(aggregatedText.String()), 0644); err != nil {
 		log.Printf("Failed to write OCR text to file: %s", err)
 		return false
 	}
