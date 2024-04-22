@@ -2,13 +2,12 @@ package main
 
 import (
 	"flag"
-	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 
+	"github.com/charmbracelet/log"
 	"github.com/otiai10/gosseract/v2"
 )
 
@@ -26,22 +25,40 @@ func main() {
 		log.Fatalf("Failed to read input directory: %s", err)
 	}
 
+	log.Info("Starting PDF text extraction process...")
+
 	for _, file := range files {
 		if !file.IsDir() && strings.HasSuffix(file.Name(), ".pdf") {
 			pdfPath := filepath.Join(*inputDir, file.Name())
-			fmt.Printf("Processing %s\n", pdfPath)
-			if !tryOCR(pdfPath, *outputDir) {
-				fmt.Println("OCR not suitable, trying direct text extraction with pdftotext...")
-				extractTextWithPdftotext(pdfPath, *outputDir)
+			log.Infof("Processing %s", pdfPath)
+
+			if !extractTextWithPdftotext(pdfPath, *outputDir) {
+				log.Warn("Direct text extraction failed, trying OCR...")
+				tryOCR(pdfPath, *outputDir)
 			}
 		}
 	}
+
+	log.Info("PDF text extraction process completed.")
 }
+
+func extractTextWithPdftotext(pdfPath, outputDir string) bool {
+	outputFilePath := filepath.Join(outputDir, strings.TrimSuffix(filepath.Base(pdfPath), filepath.Ext(pdfPath))+".txt")
+	cmd := exec.Command("pdftotext", pdfPath, outputFilePath)
+	err := cmd.Run()
+	if err != nil {
+		log.Errorf("Failed to extract text from %s using pdftotext: %s", pdfPath, err)
+		return false
+	}
+
+	log.Infof("Direct text extraction successful for %s", pdfPath)
+	return true
+}
+
 func tryOCR(pdfPath, outputDir string) bool {
-	// Must have Poppler installed for pdftoppm
 	tempDir, err := os.MkdirTemp("", "pdf_images")
 	if err != nil {
-		log.Printf("Failed to create temp directory: %s", err)
+		log.Errorf("Failed to create temp directory: %s", err)
 		return false
 	}
 	defer os.RemoveAll(tempDir)
@@ -50,29 +67,27 @@ func tryOCR(pdfPath, outputDir string) bool {
 	imagePattern := filepath.Join(tempDir, baseName+"-%03d.png")
 	cmd := exec.Command("pdftoppm", "-png", pdfPath, imagePattern)
 	if err := cmd.Run(); err != nil {
-		log.Printf("Failed to convert PDF to images: %s", err)
+		log.Errorf("Failed to convert PDF to images: %s", err)
 		return false
 	}
 
 	images, err := filepath.Glob(filepath.Join(tempDir, baseName+"-*.png"))
 	if err != nil {
-		log.Printf("Failed to find converted images: %s", err)
+		log.Errorf("Failed to find converted images: %s", err)
 		return false
 	}
 
 	var aggregatedText strings.Builder
-
 	for _, imagePath := range images {
 		client := gosseract.NewClient()
 		defer client.Close()
 		if err := client.SetImage(imagePath); err != nil {
-			log.Printf("Error setting image for OCR: %s", err)
+			log.Errorf("Error setting image for OCR: %s", err)
 			continue
 		}
-
 		text, err := client.Text()
 		if err != nil || text == "" {
-			log.Printf("Error performing OCR or no text found: %s", err)
+			log.Errorf("Error performing OCR or no text found: %s", err)
 			continue
 		}
 		aggregatedText.WriteString(text + "\n")
@@ -80,21 +95,10 @@ func tryOCR(pdfPath, outputDir string) bool {
 
 	outputFilePath := filepath.Join(outputDir, baseName+".txt")
 	if err := os.WriteFile(outputFilePath, []byte(aggregatedText.String()), 0644); err != nil {
-		log.Printf("Failed to write OCR text to file: %s", err)
+		log.Errorf("Failed to write OCR text to file: %s", err)
 		return false
 	}
 
-	fmt.Printf("OCR text extraction successful for %s\n", pdfPath)
+	log.Infof("OCR text extraction successful for %s", pdfPath)
 	return true
-}
-
-func extractTextWithPdftotext(pdfPath, outputDir string) {
-	outputFilePath := filepath.Join(outputDir, strings.TrimSuffix(filepath.Base(pdfPath), filepath.Ext(pdfPath))+".txt")
-	cmd := exec.Command("pdftotext", pdfPath, outputFilePath)
-	err := cmd.Run()
-	if err != nil {
-		log.Printf("Failed to extract text from %s using pdftotext: %s", pdfPath, err)
-	} else {
-		fmt.Printf("Direct text extraction successful for %s\n", pdfPath)
-	}
 }
